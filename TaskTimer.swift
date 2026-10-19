@@ -37,7 +37,7 @@ struct Segment {
     var seconds: TimeInterval
 }
 
-/// メモの履歴：その日以降に有効なメモ（次に書き換えた日まで引き継がれる）
+/// メモの履歴：その日だけのメモ（日をまたぐと新しいメモになる）
 struct NoteEntry: Codable {
     var day: String    // "yyyy-MM-dd"
     var text: String
@@ -67,7 +67,7 @@ struct AppData: Codable {
         if let h = try c.decodeIfPresent([String: [NoteEntry]].self, forKey: .noteHistory) {
             noteHistory = h
         } else {
-            // 旧バージョンのメモ（日付なし）は、ずっと前から有効なメモとして引き継ぐ
+            // 旧バージョンのメモ（日付なし）は、過去の日付のメモとして残す
             let l = try decoder.container(keyedBy: LegacyKeys.self)
             let old = try l.decodeIfPresent([String: String].self, forKey: .notes) ?? [:]
             noteHistory = old.mapValues { [NoteEntry(day: "1970-01-01", text: $0)] }
@@ -488,34 +488,24 @@ final class Store: ObservableObject {
         save()
     }
 
-    // MARK: メモ（日付ごとに保存。書き換えるまでは前の日のメモを引き継ぐ）
+    // MARK: メモ（日付ごとに保存。日をまたぐと新しいメモになる）
 
     private func dayKey(_ day: Date) -> String { Fmt.day.string(from: day) }
 
-    /// その日のメモ（指定なしなら今日）
+    /// その日のメモ（指定なしなら今日）。その日に書いたメモだけを返す
     func note(for task: String, on day: Date? = nil) -> String {
         let key = dayKey(day ?? logicalToday)
-        return data.noteHistory[task]?
-            .filter { $0.day <= key }
-            .max(by: { $0.day < $1.day })?.text ?? ""
-    }
-
-    /// 今日のメモが、前の日から引き継いだものか
-    func noteIsCarriedOver(_ task: String) -> Bool {
-        let key = dayKey(logicalToday)
-        let list = data.noteHistory[task] ?? []
-        return !note(for: task).isEmpty && !list.contains { $0.day == key }
+        return data.noteHistory[task]?.first(where: { $0.day == key })?.text ?? ""
     }
 
     /// 今日のメモを保存（前の日のメモはそのまま残る）
     func setNote(_ task: String, _ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = dayKey(logicalToday)
-        var list = (data.noteHistory[task] ?? []).sorted { $0.day < $1.day }
-        let previous = list.last(where: { $0.day < key })?.text ?? ""
+        var list = data.noteHistory[task] ?? []
         let before = list.first(where: { $0.day == key })?.text
         list.removeAll { $0.day == key }
-        if t != previous {
+        if !t.isEmpty {
             list.append(NoteEntry(day: key, text: t))
             list.sort { $0.day < $1.day }
         }
@@ -1133,11 +1123,6 @@ struct TaskRow: View {
                 Spacer()
                 Text("入力すると自動で保存されます").font(.caption2).foregroundStyle(.secondary)
             }
-            if store.noteIsCarriedOver(task) {
-                Text("前の日のメモを引き継いでいます。書き換えると今日のメモとして保存され、前の日の分はそのまま残ります。")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             TextEditor(text: $memoText)
                 .font(.body)
                 .frame(height: 80)
@@ -1151,7 +1136,8 @@ struct TaskRow: View {
             }
         }
         .modifier(PanelStyle())
-        .onDisappear { store.setNote(task, memoText) }
+        // 開いたまま日をまたいだら、新しい日のメモに切り替える
+        .onChange(of: store.logicalToday) { _ in memoText = store.note(for: task) }
     }
 }
 
