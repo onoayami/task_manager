@@ -498,10 +498,10 @@ final class Store: ObservableObject {
         return data.noteHistory[task]?.first(where: { $0.day == key })?.text ?? ""
     }
 
-    /// 今日のメモを保存（前の日のメモはそのまま残る）
-    func setNote(_ task: String, _ text: String) {
+    /// その日のメモを保存（指定なしなら今日。ほかの日のメモはそのまま残る）
+    func setNote(_ task: String, _ text: String, on day: Date? = nil) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = dayKey(logicalToday)
+        let key = dayKey(day ?? logicalToday)
         var list = data.noteHistory[task] ?? []
         let before = list.first(where: { $0.day == key })?.text
         list.removeAll { $0.day == key }
@@ -940,6 +940,7 @@ struct TaskRow: View {
     @State private var editMinutes = ""
     @State private var editError: String?
     @State private var memoText = ""
+    @State private var memoDay = Date.distantPast   // memoText がどの日のメモか
     @State private var resetNoteToo = false
 
     var body: some View {
@@ -1013,7 +1014,7 @@ struct TaskRow: View {
             editMinutes = String(Int(store.todayTotal(for: task) / 60))
             editError = nil
         case .memo:
-            memoText = store.note(for: task)
+            loadTodayMemo()
         default: break
         }
         mode = m
@@ -1119,7 +1120,7 @@ struct TaskRow: View {
     private var memoPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("今日のメモ").font(.caption).foregroundStyle(.secondary)
+                Text("今日のメモ（\(Fmt.label.string(from: memoDay))）").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text("入力すると自動で保存されます").font(.caption2).foregroundStyle(.secondary)
             }
@@ -1128,7 +1129,9 @@ struct TaskRow: View {
                 .frame(height: 80)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
                 .onChange(of: memoText) { text in
-                    store.setNote(task, text)   // 入力のたびに自動保存
+                    // 入力のたびに自動保存。書いていた日のメモとして保存し、今日のメモには混ぜない
+                    store.setNote(task, text, on: memoDay)
+                    if memoDay != store.logicalToday { loadTodayMemo() }
                 }
             HStack {
                 Spacer()
@@ -1137,7 +1140,14 @@ struct TaskRow: View {
         }
         .modifier(PanelStyle())
         // 開いたまま日をまたいだら、新しい日のメモに切り替える
-        .onChange(of: store.logicalToday) { _ in memoText = store.note(for: task) }
+        // （メニューを閉じている間に日付が変わった場合も、開いた時に切り替える）
+        .onChange(of: store.logicalToday) { _ in loadTodayMemo() }
+        .onAppear { if memoDay != store.logicalToday { loadTodayMemo() } }
+    }
+
+    private func loadTodayMemo() {
+        memoDay = store.logicalToday
+        memoText = store.note(for: task)
     }
 }
 
