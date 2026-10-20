@@ -328,7 +328,8 @@ final class Store: ObservableObject {
         }
 
         on(ws, NSWorkspace.willSleepNotification) { $0.autoPause(.sleep) }
-        on(ws, NSWorkspace.didWakeNotification) { $0.autoResume(.sleep) }
+        on(ws, NSWorkspace.didWakeNotification) { $0.now = Date(); $0.autoResume(.sleep) }
+        on(NotificationCenter.default, .NSCalendarDayChanged) { $0.now = Date() }
         on(dn, Notification.Name("com.apple.screenIsLocked")) { $0.autoPause(.lock) }
         on(dn, Notification.Name("com.apple.screenIsUnlocked")) { $0.autoResume(.lock) }
         on(ws, NSWorkspace.willPowerOffNotification) { $0.pauseForQuit() }
@@ -693,7 +694,7 @@ struct ContentView: View {
 
                 VStack(spacing: 4) {
                     ForEach(store.data.tasks, id: \.self) { task in
-                        TaskRow(task: task, isSelected: Binding(
+                        TaskRow(task: task, day: exportDay, isSelected: Binding(
                             get: { selected.contains(task) },
                             set: { on in
                                 if on { selected.insert(task) } else { selected.remove(task) }
@@ -933,6 +934,7 @@ enum RowMode { case normal, edit, confirmDelete, confirmReset, memo }
 struct TaskRow: View {
     @EnvironmentObject var store: Store
     let task: String
+    let day: Date            // 下で選んでいる日（メモはこの日の分を表示・編集する）
     @Binding var isSelected: Bool
 
     @State private var mode: RowMode = .normal
@@ -940,13 +942,13 @@ struct TaskRow: View {
     @State private var editMinutes = ""
     @State private var editError: String?
     @State private var memoText = ""
-    @State private var memoDay = Date.distantPast   // memoText がどの日のメモか
+    @State private var memoDay = Date.distantPast   // memoText がどの日のメモか（その日に保存する）
     @State private var resetNoteToo = false
 
     var body: some View {
         let isActive = store.isActive(task)
         let isRunning = store.isRunning(task)
-        let memo = store.note(for: task)
+        let memo = store.note(for: task, on: day)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -1014,7 +1016,7 @@ struct TaskRow: View {
             editMinutes = String(Int(store.todayTotal(for: task) / 60))
             editError = nil
         case .memo:
-            loadTodayMemo()
+            loadMemo()
         default: break
         }
         mode = m
@@ -1120,7 +1122,9 @@ struct TaskRow: View {
     private var memoPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("今日のメモ（\(Fmt.label.string(from: memoDay))）").font(.caption).foregroundStyle(.secondary)
+                Text(memoDay == store.logicalToday ? "今日のメモ（\(Fmt.label.string(from: memoDay))）"
+                                                   : "\(Fmt.label.string(from: memoDay))のメモ")
+                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text("入力すると自動で保存されます").font(.caption2).foregroundStyle(.secondary)
             }
@@ -1128,26 +1132,21 @@ struct TaskRow: View {
                 .font(.body)
                 .frame(height: 80)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
-                .onChange(of: memoText) { text in
-                    // 入力のたびに自動保存。書いていた日のメモとして保存し、今日のメモには混ぜない
-                    store.setNote(task, text, on: memoDay)
-                    if memoDay != store.logicalToday { loadTodayMemo() }
-                }
             HStack {
                 Spacer()
                 Button("閉じる") { mode = .normal }
             }
         }
         .modifier(PanelStyle())
-        // 開いたまま日をまたいだら、新しい日のメモに切り替える
-        // （メニューを閉じている間に日付が変わった場合も、開いた時に切り替える）
-        .onChange(of: store.logicalToday) { _ in loadTodayMemo() }
-        .onAppear { if memoDay != store.logicalToday { loadTodayMemo() } }
+        // 入力のたびに自動保存（入力欄に出ている日のメモとして保存する）
+        .onChange(of: memoText) { text in store.setNote(task, text, on: memoDay) }
+        // 下で日付を切り替えた時・日をまたいだ時は、その日のメモに切り替える
+        .onChange(of: day) { _ in loadMemo() }
     }
 
-    private func loadTodayMemo() {
-        memoDay = store.logicalToday
-        memoText = store.note(for: task)
+    private func loadMemo() {
+        memoDay = day
+        memoText = store.note(for: task, on: day)
     }
 }
 
