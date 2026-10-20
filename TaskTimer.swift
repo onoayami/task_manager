@@ -541,9 +541,11 @@ final class Store: ObservableObject {
         totals(on: day).reduce(0) { $0 + $1.seconds }
     }
 
-    func todayTotal(for task: String) -> TimeInterval {
-        totals(on: logicalToday).first(where: { $0.task == task })?.seconds ?? 0
+    func total(for task: String, on day: Date) -> TimeInterval {
+        totals(on: day).first(where: { $0.task == task })?.seconds ?? 0
     }
+
+    func todayTotal(for task: String) -> TimeInterval { total(for: task, on: logicalToday) }
 
     private func save() {
         let enc = JSONEncoder()
@@ -974,7 +976,7 @@ struct TaskRow: View {
                     }
                 }
                 Spacer()
-                Text(Fmt.minutes(store.todayTotal(for: task)))
+                Text(Fmt.minutes(store.total(for: task, on: day)))   // 下で選んでいる日の時間
                     .font(.caption).foregroundStyle(.secondary)
 
                 // 編集 → メモ → リセット → 削除
