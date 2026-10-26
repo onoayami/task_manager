@@ -423,6 +423,15 @@ final class Store: ObservableObject {
         save()
     }
 
+    /// 並べ替え：task を target の位置へ移動する
+    func moveTask(_ task: String, to target: String) {
+        guard task != target,
+              let from = data.tasks.firstIndex(of: task),
+              let to = data.tasks.firstIndex(of: target) else { return }
+        data.tasks.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        save()
+    }
+
     func deleteTask(_ name: String) { deleteTasks([name]) }
 
     /// タスクを一覧から削除（過去の記録は書き出し用に残す）
@@ -672,6 +681,8 @@ struct ContentView: View {
     @State private var resetNotesToo = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showSettings = false
+    @State private var draggingTask: String?   // ドラッグで並べ替え中のタスク
+    @State private var rowFrames: [String: CGRect] = [:]   // 各行の位置（並べ替えの判定用）
 
     private var exportDay: Date {
         Calendar.current.date(byAdding: .day, value: dayOffset, to: store.logicalToday)!
@@ -702,9 +713,18 @@ struct ContentView: View {
                                 if on { selected.insert(task) } else { selected.remove(task) }
                                 if validSelection.isEmpty { bulkConfirm = .none }
                             }
-                        ))
+                        ),
+                        onDragMove: { y in dragMoved(task, to: y) },
+                        onDragEnd: { draggingTask = nil })
+                        .opacity(draggingTask == task ? 0.5 : 1)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: RowFrameKey.self,
+                                                   value: [task: g.frame(in: .named("taskList"))])
+                        })
                     }
                 }
+                .coordinateSpace(name: "taskList")
+                .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
                 .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -790,6 +810,17 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// ドラッグ中：つかんだ位置が隣の行の真ん中を越えたら、その位置へ移動する
+    private func dragMoved(_ task: String, to y: CGFloat) {
+        draggingTask = task
+        let tasks = store.data.tasks
+        guard let from = tasks.firstIndex(of: task) else { return }
+        let below = tasks[(from + 1)...].filter { (rowFrames[$0]?.midY ?? .infinity) < y }
+        let above = tasks[..<from].filter { (rowFrames[$0]?.midY ?? -.infinity) > y }
+        guard let target = below.last ?? above.first else { return }
+        withAnimation(.easeInOut(duration: 0.15)) { store.moveTask(task, to: target) }
     }
 
     private func add() {
@@ -927,6 +958,16 @@ struct ActiveRunCard: View {
     }
 }
 
+// MARK: - 並べ替え
+
+/// 各行の位置を集める
+struct RowFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 // MARK: - Task Row
 
 enum BulkConfirm { case none, delete, reset }
@@ -938,6 +979,9 @@ struct TaskRow: View {
     let task: String
     let day: Date            // 下で選んでいる日（メモはこの日の分を表示・編集する）
     @Binding var isSelected: Bool
+    var onDragMove: (CGFloat) -> Void = { _ in }
+    var onDragEnd: () -> Void = {}
+    @GestureState private var isDragging = false
 
     @State private var mode: RowMode = .normal
     @State private var editName = ""
@@ -954,6 +998,24 @@ struct TaskRow: View {
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
+                // ここをつかんで上下にドラッグすると並べ替えられる
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 28)
+                    .contentShape(Rectangle())
+                    .help("ドラッグで並べ替え")
+                    .onHover { inside in
+                        if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 2, coordinateSpace: .named("taskList"))
+                            .updating($isDragging) { _, state, _ in state = true }
+                            .onChanged { onDragMove($0.location.y) }
+                            .onEnded { _ in onDragEnd() }
+                    )
+                    // ドラッグが途中で取り消された場合も、薄い表示を元に戻す
+                    .onChange(of: isDragging) { dragging in if !dragging { onDragEnd() } }
+
                 Toggle("", isOn: $isSelected)
                     .toggleStyle(.checkbox)
                     .labelsHidden()
