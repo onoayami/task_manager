@@ -1001,8 +1001,9 @@ struct TaskRow: View {
                 // ここをつかんで上下にドラッグすると並べ替えられる
                 Image(systemName: "line.3.horizontal")
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 28)
-                    .contentShape(Rectangle())
+                    .frame(width: 18)
+                    // 行の高さは変えずに、つかめる範囲だけ少し広げる
+                    .contentShape(Rectangle().inset(by: -5))
                     .help("ドラッグで並べ替え")
                     .onHover { inside in
                         if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
